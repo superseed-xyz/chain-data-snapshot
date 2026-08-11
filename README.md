@@ -35,7 +35,7 @@ Source queries, all public:
 | --- | --- |
 | [8282318](https://dune.com/queries/8282318) | raw holder snapshot and the L1/L2 reconciliation |
 | [8282885](https://dune.com/queries/8282885) | enriched snapshot (what `--enriched` pulls) |
-| [8282447](https://dune.com/queries/8282447) | legacy merkle input, hex amounts — superseded, do not use |
+| [8282447](https://dune.com/queries/8282447) | legacy merkle input, hex amounts; superseded, do not use |
 
 A free Dune account is enough. If you only want the claim set, you need neither the key nor
 the enriched file: `eth-holders-snapshot.json` is committed.
