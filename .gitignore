@@ -1,0 +1,10 @@
+# Holds DUNE_API_KEY. Never commit it.
+.env
+.env.local
+
+.DS_Store
+node_modules/
+
+# Pre-joined view of public chain data, rebuildable from Dune query 8282885.
+# Not committed: see README. Keep it locally to run derive.mjs.
+eth-holders-enriched.json
