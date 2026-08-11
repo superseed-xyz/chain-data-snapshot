@@ -9,7 +9,7 @@ live in `merkle-distributor`; the claim interface lives in `eth-claim-portal`.
 
 | File | What it is |
 | --- | --- |
-| `eth-holders-snapshot.json` | **The claim set.** 0.0001 ETH dust floor, 10,518 entries, 50.449251009702811233 ETH. This is what the distribution is built from. |
+| `eth-holders-snapshot.json` | **The claim set.** Every holder, dust included: 27,804 entries, 50.964771522921970938 ETH. This is what the distribution is built from. |
 | `derive.mjs` | Derives the claim set from the enriched snapshot. Offline, no API key. |
 | `fetch-snapshot.mjs` | Rebuilds the enriched snapshot from Dune. Needs an API key. |
 
@@ -45,20 +45,21 @@ the enriched file: `eth-holders-snapshot.json` is committed.
 With the enriched file present:
 
 ```bash
-node derive.mjs --min-eth 0.0001 --out eth-holders-snapshot.json
+node derive.mjs --out eth-holders-snapshot.json
 ```
 
 That reproduces the committed file byte-for-byte, which is the check that the snapshot has
 not silently drifted:
 
 ```bash
-node derive.mjs --min-eth 0.0001 --out /tmp/check.json && diff /tmp/check.json eth-holders-snapshot.json
+node derive.mjs --out /tmp/check.json && diff /tmp/check.json eth-holders-snapshot.json
 ```
 
 Other views:
 
 ```bash
-node derive.mjs --all                 # include system addresses
+node derive.mjs --all                 # include system addresses too
+node derive.mjs --min-eth 0.0001      # apply a dust floor (NOT used for the shipped set)
 node derive.mjs --exclude-contracts   # EOAs and Safes only
 node derive.mjs --only-safes          # just the multisigs
 ```
@@ -72,7 +73,7 @@ the only shape the merkle pipeline accepts, and it feeds straight into
 ```bash
 cd ../merkle-distributor
 yarn pipeline ../chain-data-snapshot/eth-holders-snapshot.json \
-  --expect-count 10518 --expect-total 50449251009702811233
+  --expect-count 27804 --expect-total 50964771522921970938
 ```
 
 `--expect-*` are the operator's guard against being handed the wrong file. The pipeline
