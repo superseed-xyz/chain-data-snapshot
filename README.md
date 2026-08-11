@@ -58,15 +58,15 @@ node derive.mjs --out /tmp/check.json && diff /tmp/check.json eth-holders-snapsh
 Other views:
 
 ```bash
-node derive.mjs --all                 # include system addresses too
-node derive.mjs --min-eth 0.0001      # apply a dust floor (NOT used for the shipped set)
-node derive.mjs --exclude-contracts   # EOAs and Safes only
-node derive.mjs --only-safes          # just the multisigs
+node derive.mjs --all                       # include system predeploys too
+node derive.mjs --min-eth 0.0001            # apply a dust floor at derivation instead
+node derive.mjs --exclude-plain-contracts   # drop non-Safe contracts; keeps EOAs and Safes
+node derive.mjs --only-safes                # just the multisigs
 ```
 
 Output is always `[{ address, amount }]` with `amount` as a **decimal wei string**. That is
 the only shape the merkle pipeline accepts, and it feeds straight into
-`merkle-distributor`'s `build-merkle-input.mjs` with no conversion.
+`merkle-distributor`'s `build-recipients.mjs` with no conversion.
 
 ## Handing off to the pipeline
 
@@ -152,7 +152,7 @@ reconciliation), [8282885](https://dune.com/queries/8282885) (enriched).
 ## Removed
 
 `build-merkle-input.mjs` used to live here. It is superseded by
-`merkle-distributor/scripts/build-merkle-input.mjs`, which is generic across input shapes
+`merkle-distributor/scripts/build-recipients.mjs`, which is generic across input shapes
 and validates far harder. The old copy emitted the Uniswap `{address, earnings, reasons}`
 format with hex amounts, which the pipeline now rejects: hex in a decimal field inflates a
 value by ~4096x. `derive.mjs`'s `--format map` and `--format merkle` were dropped for the

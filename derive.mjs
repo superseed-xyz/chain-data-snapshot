@@ -8,12 +8,12 @@
  *   node derive.mjs --out claim.json         # claim set, {address, amount}
  *   node derive.mjs --all                    # include system addresses
  *   node derive.mjs --min-eth 0.0001         # apply a dust floor
- *   node derive.mjs --exclude-contracts      # EOAs + Safes only
+ *   node derive.mjs --exclude-plain-contracts  # drop non-Safe contracts (keeps EOAs + Safes)
  *   node derive.mjs --only-safes             # just the multisigs
  *
  * Output is `[{ address, amount }]` with amount as a DECIMAL wei string. That is
  * the only shape the merkle pipeline accepts, and it feeds straight into
- * `merkle-distributor`'s build-merkle-input.mjs with no conversion.
+ * `merkle-distributor`'s build-recipients.mjs with no conversion.
  *
  * The former `--format map` and `--format merkle` options emitted 0x-hex amounts
  * for the old Uniswap `{address, earnings, reasons}` input. That format is now
@@ -55,7 +55,15 @@ const minWei = minEth === null ? 0n : BigInt(Math.round(Number(minEth) * 1e18))
 let rows = db.holders
 if (!includeSystem) rows = rows.filter((r) => !r.is_system_address)
 if (minWei > 0n) rows = rows.filter((r) => BigInt(r.amount) >= minWei)
-if (flag('--exclude-contracts')) rows = rows.filter((r) => !r.is_contract || r.is_safe)
+// Keeps EOAs and Safes; drops only non-Safe contracts. Named "plain" deliberately:
+// a Safe IS a contract, so `--exclude-contracts` would read as dropping Safes too.
+if (flag('--exclude-plain-contracts')) rows = rows.filter((r) => !r.is_contract || r.is_safe)
+if (flag('--exclude-contracts')) {
+  throw new Error(
+    '--exclude-contracts was renamed to --exclude-plain-contracts, because it keeps Safes.\n' +
+      'A Safe is a contract, so the old name implied Safes were dropped when they are not.'
+  )
+}
 if (flag('--only-safes')) rows = rows.filter((r) => r.is_safe)
 
 const total = rows.reduce((s, r) => s + BigInt(r.amount), 0n)
@@ -77,7 +85,7 @@ process.stderr.write(
   `filters    : ${[
     includeSystem ? 'include system' : 'exclude system',
     minWei > 0n ? `>= ${minEth} ETH` : 'no floor',
-    flag('--exclude-contracts') ? 'no plain contracts' : null,
+    flag('--exclude-plain-contracts') ? 'no non-Safe contracts' : null,
     flag('--only-safes') ? 'safes only' : null,
   ].filter(Boolean).join(', ')}\n` +
   `format     : ${format}\n` +
