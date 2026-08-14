@@ -6,29 +6,28 @@
  * Conduit, not from here. Kept as the reproducibility record for the rehearsal
  * data, and as a worked example of the shape the real export must arrive in.
  *
- * Pulls the full result set of Dune query 8282447
- * ("Superseed: ETH Snapshot to Merkle Distributor Input")
- * and writes it as JSON in { address, amount } form.
+ * Two snapshots, one per asset. Pick one; there is no default, because the two
+ * write different files in different shapes and guessing which you meant is
+ * worse than asking.
  *
- *   amount = balance in WEI as a DECIMAL STRING (exact, never a JS number)
- *
- * NOTE: --hex and --map emit shapes the merkle pipeline now REJECTS. Use the
- * default decimal { address, amount } output, which feeds it directly.
- *
- * Usage:
- *   node fetch-snapshot.mjs                       # -> eth-snapshot.json
- *   node fetch-snapshot.mjs --out custom.json
- *   node fetch-snapshot.mjs --map                 # { "0xaddr": "amount", ... }
- *   node fetch-snapshot.mjs --hex                 # amount as 0x-hex instead of decimal
- *   node fetch-snapshot.mjs --execute             # force a fresh run before fetching
- *   node fetch-snapshot.mjs --from-csv export.csv # skip the API, use a UI CSV export
+ *   node fetch-snapshot.mjs --enriched            # -> eth-holders-enriched.json
  *   node fetch-snapshot.mjs --erc20               # -> erc20-holders-enriched.json
  *
- * --erc20 pulls a different asset entirely: the ERC20 holder snapshot (query
- * 8328129), nested as tokens[] each with their own holders[]. Amounts are still
- * exact decimal strings, but in the token's own base units, NOT wei - a token
- * carries its own `decimals`. That file feeds verify-balances.mjs, not the
- * merkle pipeline, which only ever distributes native ETH.
+ *   node fetch-snapshot.mjs --enriched --out custom.json
+ *   node fetch-snapshot.mjs --enriched --hex      # amount as 0x-hex, not decimal
+ *   node fetch-snapshot.mjs --enriched --execute  # force a fresh run before fetching
+ *   node fetch-snapshot.mjs --enriched --from-csv export.csv   # skip the API
+ *
+ * --enriched pulls native ETH (query 8282885): every holder with account type,
+ * Safe detail, deployer and activity. `amount` is WEI as a DECIMAL STRING, exact,
+ * never a JS number. derive.mjs turns that into the claim set and every other ETH
+ * view offline, which is why no other ETH query is pulled here.
+ *
+ * --erc20 pulls a different asset entirely (query 8328129), nested as tokens[]
+ * each with their own holders[]. Amounts are still exact decimal strings, but in
+ * the token's own base units, NOT wei - a token carries its own `decimals`. That
+ * file feeds verify-balances.mjs, not the merkle pipeline, which only ever
+ * distributes native ETH.
  *
  * The API key is read from $DUNE_API_KEY, or from a `.env` file in this
  * directory containing:  DUNE_API_KEY=xxxxxxxx
@@ -46,21 +45,35 @@ const opt = (n, d = null) => {
   return i === -1 ? d : argv[i + 1]
 }
 
-// --enriched pulls the context query (8282885) and writes a metadata-wrapped
-// object with every per-holder field. Otherwise: the plain {address, amount} set.
+// --enriched pulls native ETH (8282885), --erc20 the token snapshot (8328129).
 const enriched = flag('--enriched')
-// --erc20 is a different asset (query 8328129), nested tokens[] -> holders[].
 const erc20 = flag('--erc20')
-const QUERY_ID = Number(opt('--query', erc20 ? 8328129 : enriched ? 8282885 : 8282447))
-const outPath = opt(
-  '--out',
-  erc20 ? 'erc20-holders-enriched.json' : enriched ? 'eth-holders-enriched.json' : 'eth-snapshot.json'
-)
-const asMap = flag('--map')
+
+if (!enriched && !erc20) {
+  throw new Error(
+    'Pick a snapshot: --enriched (native ETH) or --erc20 (tokens).\n\n' +
+      '    DUNE_API_KEY=... node fetch-snapshot.mjs --enriched\n' +
+      '    DUNE_API_KEY=... node fetch-snapshot.mjs --erc20\n\n' +
+      'This used to default to query 8282447, which emitted the old Uniswap\n' +
+      '{address, earnings, reasons} shape with HEX amounts. merkle-distributor\n' +
+      'rejects that shape now, so the query was dropped rather than left as the\n' +
+      'default. For the claim set, use the enriched file: `node derive.mjs`.'
+  )
+}
+if (flag('--map')) {
+  throw new Error(
+    '--map is gone. It emitted { "0xaddr": "amount" }, which parse-balance-map\n' +
+      'reads as the OldFormat and passes through `0x${amount.toString(16)}` -\n' +
+      'toString() ignores the radix on a string, so "1000" becomes 0x1000 = 4096.\n' +
+      'Use derive.mjs, which only ever emits [{address, amount}] in decimal wei.'
+  )
+}
+
+const QUERY_ID = Number(opt('--query', erc20 ? 8328129 : 8282885))
+const outPath = opt('--out', erc20 ? 'erc20-holders-enriched.json' : 'eth-holders-enriched.json')
 const asHex = flag('--hex')
 const fromCsv = opt('--from-csv')
-// The plain query names the amount `earnings`; the enriched one `balance_wei_hex`.
-const amountCol = opt('--amount-column', enriched ? 'balance_wei_hex' : 'earnings')
+const amountCol = opt('--amount-column', 'balance_wei_hex')
 
 function loadKey() {
   if (process.env.DUNE_API_KEY) return process.env.DUNE_API_KEY.trim()
@@ -315,28 +328,26 @@ for (const [i, r] of rows.entries()) {
   const amount = asHex ? '0x' + wei.toString(16) : wei.toString()
   entries.push([address, amount])
 
-  if (enriched) {
-    records.push({
-      address,
-      amount,                                  // wei, exact
-      balance_eth: num(r.balance_eth),         // convenience only; lossy double
-      account_type: str(r.account_type),
-      is_contract: bool(r.is_contract),
-      is_safe: bool(r.is_safe),
-      safe_threshold: num(r.safe_threshold),
-      safe_owner_count: num(r.safe_owner_count),
-      safe_exec_count: num(r.safe_exec_count),
-      contract_name: str(r.contract_name),
-      contract_namespace: str(r.contract_namespace),
-      deployer: str(r.deployer),
-      deployed_at_block: num(r.deployed_at_block),
-      bytecode_size: num(r.bytecode_size),
-      sent_tx_count: num(r.sent_tx_count),
-      first_tx_time: str(r.first_tx_time),
-      last_tx_time: str(r.last_tx_time),
-      is_system_address: bool(r.is_system_address),
-    })
-  }
+  records.push({
+    address,
+    amount,                                  // wei, exact
+    balance_eth: num(r.balance_eth),         // convenience only; lossy double
+    account_type: str(r.account_type),
+    is_contract: bool(r.is_contract),
+    is_safe: bool(r.is_safe),
+    safe_threshold: num(r.safe_threshold),
+    safe_owner_count: num(r.safe_owner_count),
+    safe_exec_count: num(r.safe_exec_count),
+    contract_name: str(r.contract_name),
+    contract_namespace: str(r.contract_namespace),
+    deployer: str(r.deployer),
+    deployed_at_block: num(r.deployed_at_block),
+    bytecode_size: num(r.bytecode_size),
+    sent_tx_count: num(r.sent_tx_count),
+    first_tx_time: str(r.first_tx_time),
+    last_tx_time: str(r.last_tx_time),
+    is_system_address: bool(r.is_system_address),
+  })
 }
 
 // The query repeats the run-wide total on every row; use it as an integrity check.
@@ -352,29 +363,22 @@ entries.sort((a, b) => {
   return x < y ? 1 : x > y ? -1 : a[0] < b[0] ? -1 : 1
 })
 
-let payload
-if (enriched) {
-  const order = new Map(entries.map(([a], i) => [a, i]))
-  records.sort((x, y) => order.get(x.address) - order.get(y.address))
-  const tally = (k) =>
-    records.reduce((m, r) => ((m[r[k] ?? 'null'] = (m[r[k] ?? 'null'] ?? 0) + 1), m), {})
-  payload = {
-    chain: 'superseed',
-    asset: 'native ETH',
-    snapshot_block: Number(rows[0].snapshot_block),
-    snapshot_block_time: String(rows[0].snapshot_block_time),
-    source_query: `https://dune.com/queries/${QUERY_ID}`,
-    holder_count: records.length,
-    total_wei: total.toString(),
-    total_eth: Number(total) / 1e18,
-    account_type_counts: tally('account_type'),
-    safe_count: records.filter((r) => r.is_safe).length,
-    holders: records,
-  }
-} else {
-  payload = asMap
-    ? Object.fromEntries(entries)
-    : entries.map(([address, amount]) => ({ address, amount }))
+const order = new Map(entries.map(([a], i) => [a, i]))
+records.sort((x, y) => order.get(x.address) - order.get(y.address))
+const tally = (k) =>
+  records.reduce((m, r) => ((m[r[k] ?? 'null'] = (m[r[k] ?? 'null'] ?? 0) + 1), m), {})
+const payload = {
+  chain: 'superseed',
+  asset: 'native ETH',
+  snapshot_block: Number(rows[0].snapshot_block),
+  snapshot_block_time: String(rows[0].snapshot_block_time),
+  source_query: `https://dune.com/queries/${QUERY_ID}`,
+  holder_count: records.length,
+  total_wei: total.toString(),
+  total_eth: Number(total) / 1e18,
+  account_type_counts: tally('account_type'),
+  safe_count: records.filter((r) => r.is_safe).length,
+  holders: records,
 }
 
 writeFileSync(outPath, JSON.stringify(payload, null, 2) + '\n')
@@ -382,9 +386,10 @@ writeFileSync(outPath, JSON.stringify(payload, null, 2) + '\n')
 const eth = Number(total) / 1e18
 process.stderr.write(
   `wrote ${outPath}\n` +
-  `  recipients : ${entries.length}\n` +
+  `  holders    : ${entries.length}\n` +
   `  total      : ${total} wei (${eth} ETH)\n` +
   `  block      : ${rows[0].snapshot_block ?? 'n/a'} @ ${rows[0].snapshot_block_time ?? 'n/a'}\n` +
   `  amount fmt : ${asHex ? '0x-hex' : 'decimal'} wei string\n` +
-  `  shape      : ${asMap ? '{ address: amount }' : '[ { address, amount } ]'}\n`
+  `\nDerive the claim set from it:\n` +
+  `    node derive.mjs --out eth-holders-snapshot.json\n`
 )

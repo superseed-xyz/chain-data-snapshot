@@ -39,7 +39,6 @@ Source queries, all public and all committed under `queries/` (see
 | [8282318](https://dune.com/queries/8282318) | `eth-holders-snapshot.sql` | raw holder snapshot and the L1/L2 reconciliation |
 | [8282885](https://dune.com/queries/8282885) | `eth-holders-enriched.sql` | enriched snapshot (what `--enriched` pulls) |
 | [8328129](https://dune.com/queries/8328129) | `erc20-holders-enriched.sql` | ERC20 holders (what `--erc20` pulls) |
-| [8282447](https://dune.com/queries/8282447) | `legacy-merkle-input.superseded.sql` | legacy merkle input, hex amounts; superseded, do not use |
 
 A free Dune account is enough. If you only want the claim set, you need neither the key nor
 the enriched file: `eth-holders-snapshot.json` is committed.
@@ -224,3 +223,11 @@ and validates far harder. The old copy emitted the Uniswap `{address, earnings, 
 format with hex amounts, which the pipeline now rejects: hex in a decimal field inflates a
 value by ~4096x. `derive.mjs`'s `--format map` and `--format merkle` were dropped for the
 same reason.
+
+The last piece of that same format went with it. Dune query 8282447 produced those hex
+`earnings` rows, and `fetch-snapshot.mjs` still pulled it **by default** — so running the
+script with no flags fetched the one query this README told you not to use, and wrote an
+`eth-snapshot.json` that nothing consumed. Its ledger was identical to query 8282318, so
+it added nothing but the encoding. The query is no longer committed, `--map` is gone, and
+`fetch-snapshot.mjs` now requires `--enriched` or `--erc20` rather than defaulting to
+anything. Both removed flags fail with a message saying what to use instead.
