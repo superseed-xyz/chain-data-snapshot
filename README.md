@@ -13,7 +13,7 @@ live in `merkle-distributor`; the claim interface lives in `eth-claim-portal`.
 | `derive.mjs` | Derives the claim set from the enriched snapshot. Offline, no API key. |
 | `fetch-snapshot.mjs` | Rebuilds the enriched snapshot from Dune. Needs an API key. |
 | `verify-balances.mjs` | Checks the ERC20 snapshot against the chain by `eth_call`. Needs an RPC. |
-| `queries/` | The Dune SQL, committed so the snapshots are reproducible from source. |
+| `queries/` | Every Dune query, verbatim, so the snapshots are auditable from source. |
 
 ### Why the enriched snapshot is not committed
 
@@ -31,14 +31,15 @@ hosting it, because the underlying queries are public.
 DUNE_API_KEY=... node fetch-snapshot.mjs --enriched     # -> eth-holders-enriched.json
 ```
 
-Source queries, all public:
+Source queries, all public and all committed under `queries/` (see
+[`queries/README.md`](queries/README.md) for the mapping and a drift check):
 
-| Query | Contents |
-| --- | --- |
-| [8282318](https://dune.com/queries/8282318) | raw holder snapshot and the L1/L2 reconciliation |
-| [8282885](https://dune.com/queries/8282885) | enriched snapshot (what `--enriched` pulls) |
-| [8328129](https://dune.com/queries/8328129) | ERC20 holders (what `--erc20` pulls), also in `queries/` |
-| [8282447](https://dune.com/queries/8282447) | legacy merkle input, hex amounts; superseded, do not use |
+| Query | File | Contents |
+| --- | --- | --- |
+| [8282318](https://dune.com/queries/8282318) | `eth-holders-snapshot.sql` | raw holder snapshot and the L1/L2 reconciliation |
+| [8282885](https://dune.com/queries/8282885) | `eth-holders-enriched.sql` | enriched snapshot (what `--enriched` pulls) |
+| [8328129](https://dune.com/queries/8328129) | `erc20-holders-enriched.sql` | ERC20 holders (what `--erc20` pulls) |
+| [8282447](https://dune.com/queries/8282447) | `legacy-merkle-input.superseded.sql` | legacy merkle input, hex amounts; superseded, do not use |
 
 A free Dune account is enough. If you only want the claim set, you need neither the key nor
 the enriched file: `eth-holders-snapshot.json` is committed.
