@@ -337,6 +337,11 @@ for (const [i, r] of rows.entries()) {
     is_safe: bool(r.is_safe),
     safe_threshold: num(r.safe_threshold),
     safe_owner_count: num(r.safe_owner_count),
+    safe_signers: arr(r.safe_signers),
+    signer_count: num(r.signer_count),
+    // False means the signer decode disagrees with the independent owner
+    // arithmetic; do not trust that Safe's signer list.
+    signer_count_matches: bool(r.signer_count_matches),
     safe_exec_count: num(r.safe_exec_count),
     contract_name: str(r.contract_name),
     contract_namespace: str(r.contract_namespace),

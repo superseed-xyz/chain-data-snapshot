@@ -17,7 +17,17 @@ live in `merkle-distributor`; the claim interface lives in `eth-claim-portal`.
 
 `eth-holders-enriched.json` and `erc20-holders-enriched.json` are **not** committed. Both
 are rebuildable from public queries, and the pipeline consumes neither — it only ever
-takes `{address, amount}`.
+takes `{address, amount}`. Both carry Safe detail per holder, including the signer
+addresses; see [Trust, but call `balanceOf`](#trust-but-call-balanceof) for how far to
+trust a derived signer list.
+
+Pin `--snapshot_block` when rebuilding the ETH view, or it runs at chain tip and
+`derive.mjs` stops reproducing the committed claim set. The committed set is block
+**30095249**:
+
+```bash
+node fetch-snapshot.mjs --enriched --execution <id-of-a-run-pinned-to-30095249>
+```
 
 ## Rebuilding
 

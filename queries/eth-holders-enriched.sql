@@ -5,7 +5,7 @@
    per-address context for offboarding triage:
 
      - account_type / is_contract / contract_name / deployer
-     - is_safe + safe_threshold + safe_owner_count, derived from Safe's
+     - is_safe + safe_threshold + safe_owner_count + safe_signers, derived from Safe's
        own events. Dune has no safe_superseed spell and no decoded Safe
        tables for this chain, so these come from raw logs. topic0 values
        are computed with keccak() in SQL rather than hardcoded.
@@ -120,6 +120,7 @@ safe_logs AS (
     SELECT
         contract_address AS address,
         block_number,
+        index,
         data,
         CASE topic0
             WHEN keccak(to_utf8('SafeSetup(address,address[],uint256,address,address)')) THEN 'setup'
@@ -161,6 +162,72 @@ safe_info AS (
     GROUP BY 1
 ),
 
+/* Unroll owners[] from SafeSetup: word 4 is the length, owner i sits at
+   byte 161 + 32*i, right-aligned. owner_count is clamped in a CASE so a
+   malformed log cannot hand sequence() an absurd length. */
+setup_logs AS (
+    SELECT
+        address,
+        block_number,
+        index,
+        data,
+        CASE WHEN bytearray_to_uint256(bytearray_substring(data, 129, 32)) BETWEEN UINT256 '1' AND UINT256 '100'
+             THEN CAST(bytearray_to_uint256(bytearray_substring(data, 129, 32)) AS integer)
+             ELSE 0
+        END AS owner_count
+    FROM safe_logs
+    WHERE kind = 'setup'
+),
+
+setup_owners AS (
+    SELECT
+        l.address,
+        bytearray_substring(w.word, 13, 20) AS owner,
+        l.block_number * CAST(1000000 AS bigint) + l.index AS ord
+    FROM setup_logs l
+    CROSS JOIN UNNEST(
+        transform(
+            sequence(0, l.owner_count - 1),
+            i -> bytearray_substring(l.data, 161 + 32 * i, 32)
+        )
+    ) AS w(word)
+    WHERE l.owner_count >= 1
+      AND bytearray_length(l.data) >= 160 + 32 * l.owner_count
+),
+
+owner_events AS (
+    SELECT address, owner, 'add' AS action, ord FROM setup_owners
+    UNION ALL
+    SELECT
+        address,
+        bytearray_substring(data, 13, 20),
+        CASE WHEN kind = 'added' THEN 'add' ELSE 'remove' END,
+        block_number * CAST(1000000 AS bigint) + index
+    FROM safe_logs
+    WHERE kind IN ('added', 'removed')
+      AND bytearray_length(data) >= 32
+),
+
+/* Last event wins, so add -> remove -> re-add resolves correctly. */
+current_owners AS (
+    SELECT address, owner
+    FROM (
+        SELECT address, owner, MAX_BY(action, ord) AS last_action
+        FROM owner_events
+        GROUP BY 1, 2
+    )
+    WHERE last_action = 'add'
+),
+
+safe_signers AS (
+    SELECT
+        address,
+        ARRAY_AGG('0x' || lower(to_hex(owner)) ORDER BY owner) AS safe_signers,
+        COUNT(*) AS signer_count
+    FROM current_owners
+    GROUP BY 1
+),
+
 enriched AS (
     SELECT
         b.address,
@@ -179,6 +246,8 @@ enriched AS (
         s.safe_exec_count,
         COALESCE(s.latest_threshold, s.setup_threshold) AS safe_threshold,
         s.setup_owner_count + s.owners_added - s.owners_removed AS safe_owner_count,
+        sg.safe_signers,
+        sg.signer_count,
         COALESCE(a.sent_tx_count, 0) AS sent_tx_count,
         a.first_tx_block, a.first_tx_time, a.last_tx_block, a.last_tx_time
     FROM balances b
@@ -186,6 +255,7 @@ enriched AS (
     LEFT JOIN contract_meta cm ON cm.address = b.address
     LEFT JOIN activity      a  ON a.address  = b.address
     LEFT JOIN safe_info     s  ON s.address  = b.address
+    LEFT JOIN safe_signers  sg ON sg.address = b.address
     WHERE b.balance_wei > CAST(0 AS int256)
       AND b.balance_wei / 1e18 >= {{min_balance_eth}}
 )
@@ -208,6 +278,10 @@ SELECT
 
     CAST(safe_threshold   AS bigint) AS safe_threshold,
     CAST(safe_owner_count AS bigint) AS safe_owner_count,
+    safe_signers,
+    signer_count,
+    -- decode cross-check: derived signer list vs. the independent count
+    CASE WHEN is_safe THEN signer_count = CAST(safe_owner_count AS bigint) END AS signer_count_matches,
     safe_exec_count,
 
     contract_name,
