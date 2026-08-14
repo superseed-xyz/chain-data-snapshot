@@ -1,35 +1,14 @@
 /* =====================================================================
    Superseed — enriched ERC20 holder snapshot
    ---------------------------------------------------------------------
-   ERC20 counterpart to query 8282885 (native ETH). One row per (token,
-   holder), tokens by USD value (unpriced ones by holder count), holders
-   by balance within each token:
+   ERC20 counterpart to query 8282885 (native ETH).
 
    rank symbol h_rank holder      balance account_type  threshold signers
       1 SUPR        1 0xee64bc3f…  9.36e9 contract              -       -
       1 SUPR       24 0x75f834f1…  2.47e6 safe_multisig         4       7
       2 USDC        4 0x75f834f1… 1768.26 safe_multisig         4       7
 
-   Token columns repeat on each of that token's rows. Also carried: price
-   and supply per token, and per holder the exact balance, contract name,
-   deployer, activity window and the signer addresses themselves.
-
-   Params: snapshot_block, top_tokens, holders_per_token. No balance
-   floor - dust included, filter downstream.
-
-   Balances come from raw logs, NOT tokens.transfers: WETH at 0x42..06
-   emits no Transfer when it mints or burns, and tokens.transfers
-   synthesises those flows inconsistently, netting WETH to -110.8 ETH
-   against a true 10.8033. So the ledger is raw Transfer logs plus
-   Deposit/Withdrawal for tokens that never express a mint or burn as a
-   Transfer to/from 0x0 - adding those unconditionally would double-count
-   a vault emitting both. balance_source records which applied;
-   tokens.transfers only classifies which contracts are ERC20.
-
-   Signers are derived, not called: safe_signers replays SafeSetup +
-   AddedOwner + RemovedOwner, keeping an owner whose last event is not a
-   removal. signer_count_matches cross-checks that decode; if it is
-   false, do not trust that row's signer list.
+   Params: snapshot_block, top_tokens, holders_per_token.
 
    token_supply_reconciles is false when a token's ledger produced a
    negative balance, which proves its event history is incomplete. Events
