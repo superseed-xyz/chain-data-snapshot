@@ -1,72 +1,33 @@
 /* =====================================================================
    Superseed — enriched ERC20 holder snapshot
    ---------------------------------------------------------------------
-   The ERC20 counterpart to query 8282885 (native ETH). One row per
-   (token, holder), tokens ranked by value, holders ranked within each
-   token, every holder carrying the same offboarding context the ETH
-   snapshot uses:
+   ERC20 counterpart to query 8282885 (native ETH). One row per (token,
+   holder): tokens ranked by USD value at the snapshot, priced ones
+   first and unpriced by holder count; holders ranked within each token,
+   each carrying account type, contract metadata, deployer, activity,
+   and for Safes the threshold and signer addresses.
 
-     - account_type / is_contract / contract_name / deployer
-     - is_safe + threshold + owner count + THE SIGNER ADDRESSES, all
-       derived from Safe's own events. Dune has no safe_superseed spell
-       and no decoded Safe tables for this chain, so these come from raw
-       logs; topic0 values are computed with keccak() rather than
-       hardcoded.
-     - outbound tx activity: an address that has SENT a tx is provably
-       controlled by a live signer.
+   Params: snapshot_block, top_tokens, holders_per_token. No balance
+   floor - dust included, filter downstream.
 
-   WHY BALANCES COME FROM RAW LOGS, NOT tokens.transfers
-   -----------------------------------------------------
-   WETH at 0x42..06 emits ZERO Transfer events to or from the zero
-   address: 99,920 Deposit and 69,947 Withdrawal events are invisible to
-   any transfer-derived ledger. tokens.transfers synthesises some of
-   those mints/burns but not consistently (774.9 ETH minted vs 1190.6
-   deposited), so summing it nets WETH to -110.8 ETH and leaves +114.46
-   spread over the addresses that survive a > 0 filter. The truth is
-   deposits - withdrawals = 10.8033 ETH, which is exactly the native
-   balance the ETH snapshot attributes to the WETH predeploy.
+   Balances come from raw logs, NOT tokens.transfers: WETH at 0x42..06
+   emits no Transfer when it mints or burns, and tokens.transfers
+   synthesises those flows inconsistently, netting WETH to -110.8 ETH
+   against a true 10.8033. So the ledger is raw Transfer logs plus
+   Deposit/Withdrawal for tokens that never express a mint or burn as a
+   Transfer to/from 0x0 - adding those unconditionally would double-count
+   a vault emitting both. balance_source records which applied;
+   tokens.transfers only classifies which contracts are ERC20.
 
-   So the ledger is built from raw Transfer logs, and tokens that mint
-   and burn through Deposit/Withdrawal instead of Transfer get those
-   flows added. tokens.transfers is used ONLY to classify which
-   contracts are ERC20 (its token_standard is the authority there).
+   Signers are derived, not called: safe_signers replays SafeSetup +
+   AddedOwner + RemovedOwner, keeping an owner whose last event is not a
+   removal. signer_count_matches cross-checks that decode; if it is
+   false, do not trust that row's signer list.
 
-   The wrapper correction applies only to tokens that emit
-   Deposit/Withdrawal AND never represent a mint or burn as a Transfer
-   to/from 0x0 - otherwise a vault that emits both would double-count.
-   balance_source says which ledger produced each row.
-
-   INTEGRITY FLAGS: a token whose ledger is complete cannot produce a
-   negative balance. token_negative_holder_count and
-   token_supply_reconciles expose any token where it does; treat those
-   tokens' balances as unreliable rather than trusting the row.
-
-   VERIFIED AGAINST THE CHAIN. At snapshot block 30264107 all 4,149
-   output rows were checked by eth_call balanceOf against a Superseed
-   RPC, and all 8 top tokens by totalSupply: 4,148 exact, 1 mismatch.
-   The exception is YGD (0x0e63d339...), which emitted TWO mint
-   Transfers to 0x469e7e5b... in block 11463173 (50M and 500M) but only
-   credited 500M - the contract's events disagree with its own state,
-   so no event-derived ledger can be right for it. That failure mode is
-   invisible to the negative-balance check, and only an RPC comparison
-   catches it. Note that Dune's own tokens.supply_latest disagreed with
-   the chain on 5 of those 8 tokens; this query matched it exactly.
-
-   SIGNERS ARE DERIVED, NOT CALLED. safe_signers replays SafeSetup +
-   AddedOwner + RemovedOwner and keeps an owner whose LAST event is not
-   a removal (correct when an owner is added, removed, then re-added -
-   a plain set difference is not). It is not an eth_call to getOwners().
-   signer_count_matches cross-checks the decode against the independent
-   setup_owner_count + added - removed arithmetic; if it is false for a
-   Safe, do not trust that row's signer list.
-
-   VALUE RANKING: priced tokens first, by USD at the snapshot
-   (prices.day as of the cutoff, falling back to prices.latest), then
-   unpriced tokens by holder count and supply held. price_source says
-   which applied. Most Superseed-native tokens have no oracle feed, so
-   expect tier 2 to be the bulk of the list.
-
-   No balance floor - dust included, filter downstream.
+   token_supply_reconciles is false when a token's ledger produced a
+   negative balance, which proves its event history is incomplete. Events
+   can also contradict state without going negative, so confirm with
+   eth_call balanceOf before acting on these numbers.
    ===================================================================== */
 WITH cutoff AS (
     SELECT number AS block_number, date AS block_date, time AS block_time
@@ -141,9 +102,7 @@ wrapper_logs AS (
       AND bytearray_length(l.data)  >= 32
 ),
 
-/* A token that ever mints or burns via Transfer represents supply
-   changes there already; adding Deposit/Withdrawal on top would
-   double-count it. */
+/* Mints/burns already expressed as Transfer must not be counted twice. */
 mints_via_transfer AS (
     SELECT DISTINCT token
     FROM xfer_logs
@@ -428,8 +387,7 @@ owner_events AS (
       AND bytearray_length(data) >= 32
 ),
 
-/* An owner is current when its LAST event is not a removal. Handles
-   add -> remove -> re-add, which a set difference gets wrong. */
+/* Last event wins, so add -> remove -> re-add resolves correctly. */
 current_owners AS (
     SELECT address, owner
     FROM (
