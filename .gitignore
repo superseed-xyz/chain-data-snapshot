@@ -8,3 +8,7 @@ node_modules/
 # Pre-joined view of public chain data, rebuildable from Dune query 8282885.
 # Not committed: see README. Keep it locally to run derive.mjs.
 eth-holders-enriched.json
+
+# Same deal for the ERC20 side, rebuildable from Dune query 8328129.
+# The query itself IS committed, in queries/.
+erc20-holders-enriched.json

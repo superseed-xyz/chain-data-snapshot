@@ -12,6 +12,8 @@ live in `merkle-distributor`; the claim interface lives in `eth-claim-portal`.
 | `eth-holders-snapshot.json` | **The claim set.** Every holder, dust included: 27,804 entries, 50.964771522921970938 ETH. This is what the distribution is built from. |
 | `derive.mjs` | Derives the claim set from the enriched snapshot. Offline, no API key. |
 | `fetch-snapshot.mjs` | Rebuilds the enriched snapshot from Dune. Needs an API key. |
+| `verify-balances.mjs` | Checks the ERC20 snapshot against the chain by `eth_call`. Needs an RPC. |
+| `queries/` | The Dune SQL, committed so the snapshots are reproducible from source. |
 
 ### Why the enriched snapshot is not committed
 
@@ -35,6 +37,7 @@ Source queries, all public:
 | --- | --- |
 | [8282318](https://dune.com/queries/8282318) | raw holder snapshot and the L1/L2 reconciliation |
 | [8282885](https://dune.com/queries/8282885) | enriched snapshot (what `--enriched` pulls) |
+| [8328129](https://dune.com/queries/8328129) | ERC20 holders (what `--erc20` pulls), also in `queries/` |
 | [8282447](https://dune.com/queries/8282447) | legacy merkle input, hex amounts; superseded, do not use |
 
 A free Dune account is enough. If you only want the claim set, you need neither the key nor
@@ -141,13 +144,76 @@ Expect counts and totals to change with the real data, so update the guards:
 yarn distribution <export> --min-eth 0.0001 --expect-count <N> --expect-total <WEI>
 ```
 
+## ERC20 holders
+
+A different asset and a different question. The ETH snapshot answers "who gets paid";
+this one answers "who is holding what, and can they still sign for it" — which is the
+part of offboarding that involves talking to people.
+
+```bash
+DUNE_API_KEY=... node fetch-snapshot.mjs --erc20         # -> erc20-holders-enriched.json
+node verify-balances.mjs --rpc <superseed-rpc-url>       # check it against the chain
+```
+
+`tokens[]` ranked by USD value at the snapshot (priced first, then by holder count),
+each with its own `holders[]`. Every holder carries the same context the ETH snapshot
+uses — account type, contract metadata, deployer, activity window — plus, for Safes,
+the threshold and **the signer addresses**. Defaults to the top 50 tokens and top 500
+holders per token; raise the query parameters for more. Amounts are exact decimal
+strings in each token's own base units, so read `decimals` before comparing them.
+
+This file feeds nobody. It is a triage artifact, not pipeline input: the merkle
+distributor only ever distributes native ETH. Like the enriched ETH view it is
+rebuildable and therefore not committed, but `queries/erc20-holders-enriched.sql` is,
+so the derivation is auditable without a Dune account.
+
+### Why it does not use `tokens.transfers`
+
+WETH at `0x42..06` emits **no** `Transfer` event when it mints or burns: 99,920
+`Deposit` and 69,947 `Withdrawal` events are invisible to a transfer-derived ledger.
+Dune's `tokens.transfers` synthesises some of them but not consistently, which nets
+WETH to *minus* 110.8 ETH and leaves a bogus +114.46 spread across whichever addresses
+survive a `> 0` filter. The true figure is deposits minus withdrawals, 10.8033 ETH —
+exactly the native balance this README already attributes to the WETH predeploy.
+
+So balances come from raw `Transfer` logs, with `Deposit`/`Withdrawal` flows added for
+tokens that never express a mint or burn as a `Transfer` to or from `0x0`. Dune's
+`tokens.supply_latest` is not a usable cross-check either: it disagreed with
+`totalSupply()` on five of the top eight tokens.
+
+### Trust, but call `balanceOf`
+
+Every balance in that file is derived from event logs, and events can lie. Run
+`verify-balances.mjs` before acting on the numbers; it replays every holder row as
+`balanceOf` at the snapshot block and every token as `totalSupply`, and exits non-zero
+on any disagreement. It needs an **archive** RPC, since it reads at the snapshot block
+rather than at head. At block 30264107 it was 4,148 exact of 4,149, with all 50
+supplies matching.
+
+Two things it is worth knowing about, because both are the token's fault and neither is
+fixable from log data:
+
+- **YGD** (`0x0e63d339…`) emitted two mint `Transfer`s to `0x469e7e5b…` in block
+  11463173, 50M and 500M, but credited only 500M. That holder reads 50M high forever.
+  Pass `--ignore-token 0x0e63d339b9147bf1bc72f34e2a19761d8214622b` for a clean exit.
+- **`supply_reconciles: false`** on a token means its own ledger produced a negative
+  balance somewhere, which is impossible on chain and so proves the event history is
+  incomplete. `ionUSDC` and `ionWETH` currently trip it. Their surviving positive
+  balances still verified against the chain, but treat those two as unreliable rather
+  than assuming the check was noise.
+
 ## Dune access
 
 Only `fetch-snapshot.mjs` needs a key. Put `DUNE_API_KEY=` in `.env` (gitignored) or export
 it. `derive.mjs` never touches the network.
 
+`verify-balances.mjs` needs no Dune key — it needs an archive RPC instead, via `--rpc` or
+`SUPERSEED_RPC_URL`. Superseed mainnet is chain 5330. Keep any keyed endpoint out of the
+repo; `.env` is gitignored for exactly this.
+
 Source queries: [8282318](https://dune.com/queries/8282318) (raw snapshot and
-reconciliation), [8282885](https://dune.com/queries/8282885) (enriched).
+reconciliation), [8282885](https://dune.com/queries/8282885) (enriched),
+[8328129](https://dune.com/queries/8328129) (ERC20 holders).
 
 ## Removed
 

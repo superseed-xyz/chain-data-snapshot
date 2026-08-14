@@ -22,6 +22,13 @@
  *   node fetch-snapshot.mjs --hex                 # amount as 0x-hex instead of decimal
  *   node fetch-snapshot.mjs --execute             # force a fresh run before fetching
  *   node fetch-snapshot.mjs --from-csv export.csv # skip the API, use a UI CSV export
+ *   node fetch-snapshot.mjs --erc20               # -> erc20-holders-enriched.json
+ *
+ * --erc20 pulls a different asset entirely: the ERC20 holder snapshot (query
+ * 8328129), nested as tokens[] each with their own holders[]. Amounts are still
+ * exact decimal strings, but in the token's own base units, NOT wei - a token
+ * carries its own `decimals`. That file feeds verify-balances.mjs, not the
+ * merkle pipeline, which only ever distributes native ETH.
  *
  * The API key is read from $DUNE_API_KEY, or from a `.env` file in this
  * directory containing:  DUNE_API_KEY=xxxxxxxx
@@ -42,8 +49,13 @@ const opt = (n, d = null) => {
 // --enriched pulls the context query (8282885) and writes a metadata-wrapped
 // object with every per-holder field. Otherwise: the plain {address, amount} set.
 const enriched = flag('--enriched')
-const QUERY_ID = Number(opt('--query', enriched ? 8282885 : 8282447))
-const outPath = opt('--out', enriched ? 'eth-holders-enriched.json' : 'eth-snapshot.json')
+// --erc20 is a different asset (query 8328129), nested tokens[] -> holders[].
+const erc20 = flag('--erc20')
+const QUERY_ID = Number(opt('--query', erc20 ? 8328129 : enriched ? 8282885 : 8282447))
+const outPath = opt(
+  '--out',
+  erc20 ? 'erc20-holders-enriched.json' : enriched ? 'eth-holders-enriched.json' : 'eth-snapshot.json'
+)
 const asMap = flag('--map')
 const asHex = flag('--hex')
 const fromCsv = opt('--from-csv')
@@ -135,8 +147,149 @@ async function fetchRows(key) {
   return rows
 }
 
+const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v))
+const bool = (v) => (typeof v === 'boolean' ? v : v === 'true' ? true : v === 'false' ? false : null)
+const str = (v) => (v === null || v === undefined || v === '' ? null : String(v))
+/** Dune returns arrays natively over the API and as a bracketed string over CSV. */
+const arr = (v) => {
+  if (Array.isArray(v)) return v.map(String)
+  if (v === null || v === undefined || v === '') return null
+  return String(v).replace(/^\[|\]$/g, '').split(/[,\s]+/).filter(Boolean)
+}
+
+/**
+ * The ERC20 query returns one flat row per (token, holder). Nest it so a token's
+ * metadata is stated once rather than repeated on every one of its holders, which
+ * also makes it impossible for two rows to disagree about the same token.
+ */
+function buildErc20(rows) {
+  const required = ['token_address', 'address', 'balance_raw_hex']
+  const missing = required.filter((c) => !(c in rows[0]))
+  if (missing.length) {
+    throw new Error(
+      `expected the ERC20 snapshot shape, missing: ${missing.join(', ')}\n` +
+        `got: ${Object.keys(rows[0]).join(', ')}\n` +
+        `Is --query pointing at the ERC20 query (8328129)?`
+    )
+  }
+
+  const tokens = new Map()
+  const seen = new Set()
+
+  for (const [i, r] of rows.entries()) {
+    const token = String(r.token_address).trim().toLowerCase()
+    const address = String(r.address).trim().toLowerCase()
+    const rawBalance = String(r.balance_raw_hex).trim().toLowerCase()
+
+    if (!/^0x[0-9a-f]{40}$/.test(token)) throw new Error(`row ${i}: malformed token ${token}`)
+    if (!/^0x[0-9a-f]{40}$/.test(address)) throw new Error(`row ${i}: malformed address ${address}`)
+    if (!/^0x[0-9a-f]+$/.test(rawBalance)) throw new Error(`row ${i}: malformed balance ${rawBalance}`)
+
+    // Addresses legitimately repeat ACROSS tokens; only (token, holder) is unique.
+    const pair = `${token}:${address}`
+    if (seen.has(pair)) throw new Error(`row ${i}: duplicate holder ${address} for token ${token}`)
+    seen.add(pair)
+
+    const amount = BigInt(rawBalance)
+    if (amount <= 0n) throw new Error(`row ${i}: non-positive balance for ${address} of ${token}`)
+
+    if (!tokens.has(token)) {
+      tokens.set(token, {
+        token_rank: num(r.token_rank),
+        token_address: token,
+        symbol: str(r.token_symbol),
+        name: str(r.token_name),
+        decimals: num(r.token_decimals),
+        price_usd: num(r.price_usd),
+        price_source: str(r.price_source),
+        price_time: str(r.price_time),
+        holder_count: num(r.token_holder_count),
+        supply_held: num(r.token_supply_held),
+        total_supply_latest: num(r.total_supply_latest),
+        value_usd: num(r.token_value_usd),
+        // How the ledger was built, and whether it is internally consistent.
+        // A false supply_reconciles means that token's balances are NOT trustworthy.
+        balance_source: str(r.balance_source),
+        negative_holder_count: num(r.token_negative_holder_count),
+        supply_reconciles: bool(r.token_supply_reconciles),
+        holders: [],
+      })
+    }
+
+    tokens.get(token).holders.push({
+      address,
+      amount: amount.toString(),          // exact, in the token's base units
+      balance: num(r.balance),            // convenience only; lossy double
+      balance_usd: num(r.balance_usd),
+      share_of_supply_pct: num(r.share_of_supply_pct),
+      account_type: str(r.account_type),
+      is_contract: bool(r.is_contract),
+      is_safe: bool(r.is_safe),
+      safe_threshold: num(r.safe_threshold),
+      safe_owner_count: num(r.safe_owner_count),
+      safe_signers: arr(r.safe_signers),
+      signer_count: num(r.signer_count),
+      // False means the signer decode disagrees with the independent owner
+      // arithmetic; do not trust that Safe's signer list.
+      signer_count_matches: bool(r.signer_count_matches),
+      safe_exec_count: num(r.safe_exec_count),
+      contract_name: str(r.contract_name),
+      contract_namespace: str(r.contract_namespace),
+      deployer: str(r.deployer),
+      deployed_at_block: num(r.deployed_at_block),
+      bytecode_size: num(r.bytecode_size),
+      sent_tx_count: num(r.sent_tx_count),
+      first_tx_time: str(r.first_tx_time),
+      last_tx_time: str(r.last_tx_time),
+      is_system_address: bool(r.is_system_address),
+    })
+  }
+
+  const list = [...tokens.values()].sort((a, b) => a.token_rank - b.token_rank)
+  for (const t of list) {
+    t.holders.sort((x, y) => {
+      const [a, b] = [BigInt(x.amount), BigInt(y.amount)]
+      return a < b ? 1 : a > b ? -1 : x.address < y.address ? -1 : 1
+    })
+  }
+
+  return {
+    chain: 'superseed',
+    asset: 'ERC20',
+    snapshot_block: num(rows[0].snapshot_block),
+    snapshot_block_time: str(rows[0].snapshot_block_time),
+    source_query: `https://dune.com/queries/${QUERY_ID}`,
+    token_count: list.length,
+    holder_row_count: rows.length,
+    safe_holder_count: rows.filter((r) => bool(r.is_safe)).length,
+    unreconciled_tokens: list.filter((t) => t.supply_reconciles === false).map((t) => t.token_address),
+    tokens: list,
+  }
+}
+
 const rows = fromCsv ? parseCsv(readFileSync(fromCsv, 'utf8')) : await fetchRows(loadKey())
 if (!rows.length) throw new Error('no rows returned; run the query on Dune first, or pass --execute')
+
+if (erc20) {
+  const payload = buildErc20(rows)
+  writeFileSync(outPath, JSON.stringify(payload, null, 2) + '\n')
+  const unreconciled = payload.unreconciled_tokens.length
+  process.stderr.write(
+    `wrote ${outPath}\n` +
+    `  tokens     : ${payload.token_count}\n` +
+    `  holder rows: ${payload.holder_row_count} (${payload.safe_holder_count} held by Safes)\n` +
+    `  block      : ${payload.snapshot_block} @ ${payload.snapshot_block_time}\n` +
+    `  amount fmt : decimal string in the token's own base units\n` +
+    (unreconciled
+      ? `  WARNING    : ${unreconciled} token(s) do not reconcile; their balances are unreliable:\n` +
+        payload.unreconciled_tokens.map((t) => `               ${t}\n`).join('')
+      : `  reconciles : all ${payload.token_count} tokens, no negative balances\n`) +
+    `\nVerify against the chain before trusting these numbers:\n` +
+    `    node verify-balances.mjs --rpc <superseed-rpc-url>\n`
+  )
+  process.exit(0)
+}
+
 if (!('address' in rows[0]) || !(amountCol in rows[0])) {
   throw new Error(`expected address/${amountCol} columns, got: ${Object.keys(rows[0]).join(', ')}`)
 }
@@ -163,9 +316,6 @@ for (const [i, r] of rows.entries()) {
   entries.push([address, amount])
 
   if (enriched) {
-    const num = (v) => (v === null || v === undefined || v === '' ? null : Number(v))
-    const bool = (v) => (typeof v === 'boolean' ? v : v === 'true' ? true : v === 'false' ? false : null)
-    const str = (v) => (v === null || v === undefined || v === '' ? null : String(v))
     records.push({
       address,
       amount,                                  // wei, exact
