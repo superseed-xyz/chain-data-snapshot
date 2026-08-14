@@ -28,10 +28,8 @@ for q in 8282318:eth-holders-snapshot 8282885:eth-holders-enriched \
 done
 ```
 
-Run it from the repository root. A `DRIFT` line means the query was edited on Dune
-without updating the file here, or the reverse — the file is not what produced the
-committed data.
+Run it from the repository root. `DRIFT` means the file is not what produced the
+committed data — the query was edited on Dune without copying it back, or the reverse.
 
-The `rstrip` matters: Dune returns `query_sql` with a trailing newline for some
-queries and without it for others, so comparing raw output reports drift on files
-that are identical. Every `.sql` here ends with exactly one newline.
+The `rstrip` matters: Dune returns `query_sql` with a trailing newline for some queries
+and without it for others, so a raw comparison reports drift on identical files.
