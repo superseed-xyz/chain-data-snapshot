@@ -16,12 +16,14 @@ Defaults resolve to chain tip with no floor.
 
 ## The one that is not here
 
-Dune query [8282447](https://dune.com/queries/8282447), "ETH Snapshot → Merkle
-Distributor Input", is deliberately not committed. It emitted the old Uniswap
-`{address, earnings, reasons}` shape with **hex** `earnings`, which
-`merkle-distributor` now rejects: hex in a field parsed as decimal inflates a value by
-~4096x. Its ledger was identical to `eth-holders-snapshot.sql`, so it added nothing
-but a dangerous encoding.
+Dune query 8282447, "ETH Snapshot → Merkle Distributor Input", is **archived on Dune**
+and deliberately not committed. It emitted the old Uniswap `{address, earnings,
+reasons}` shape with **hex** `earnings`, which `merkle-distributor` now rejects: hex in
+a field parsed as decimal inflates a value by ~4096x. Its ledger was identical to
+`eth-holders-snapshot.sql`, so it added nothing but a dangerous encoding.
+
+Archiving is reversible from the Dune UI, and the id is recorded here so an old link
+that turns up in a doc or a Slack thread can be identified rather than puzzled over.
 
 There is no merkle-input query any more. The claim set is derived offline:
 
