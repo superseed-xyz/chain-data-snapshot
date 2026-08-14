@@ -2,10 +2,17 @@
    Superseed — enriched ERC20 holder snapshot
    ---------------------------------------------------------------------
    ERC20 counterpart to query 8282885 (native ETH). One row per (token,
-   holder): tokens ranked by USD value at the snapshot, priced ones
-   first and unpriced by holder count; holders ranked within each token,
-   each carrying account type, contract metadata, deployer, activity,
-   and for Safes the threshold and signer addresses.
+   holder), tokens by USD value (unpriced ones by holder count), holders
+   by balance within each token:
+
+   rank symbol h_rank holder      balance account_type  threshold signers
+      1 SUPR        1 0xee64bc3f…  9.36e9 contract              -       -
+      1 SUPR       24 0x75f834f1…  2.47e6 safe_multisig         4       7
+      2 USDC        4 0x75f834f1… 1768.26 safe_multisig         4       7
+
+   Token columns repeat on each of that token's rows. Also carried: price
+   and supply per token, and per holder the exact balance, contract name,
+   deployer, activity window and the signer addresses themselves.
 
    Params: snapshot_block, top_tokens, holders_per_token. No balance
    floor - dust included, filter downstream.
